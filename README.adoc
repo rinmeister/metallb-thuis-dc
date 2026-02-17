@@ -1,0 +1,97 @@
+== MetalLB
+
+MetalLB is perfect for bare metal Kubernetes. It can expose services to the
+outside world using Layer 2 or BGP. It is a load balancer implementation for
+bare metal Kubernetes clusters, using standard routing protocols. In Cloud
+implementations you typically use a Cloud provider loadbalancer service. On
+premises you will have to deploy your own service for that.
+
+My use case for a load balancer is purely to have a convenient way to expose my
+services externally. I could make use of a NodePort service but that is far less
+convenient. You have to configure the port on which the service is exposed.
+Nodeports are perfect when you need quick access for a service but for more
+complex setups a load balancer is the better choice. You will definitely need a
+loadbalancer service when dealing with ingress which is also part of my cluster.
+
+I installed MetalLB using the manifest files. I just followed the installation
+guide on the MetalLB website: https://metallb.universe.tf/installation/
+
+----
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.8/config/manifests/metallb-native.yaml
+----
+
+This installs a controller and speaker pods in the metallb-system namespace (the
+namespace is also created if it does nog exist). The controller is responsible
+for handling IP assignments and the speaker is responsible making the services
+reachable on the nodes on the ports you have configured. There is a speaker pod
+on each node in the cluster.
+
+Besides the pods there is a service. The MetalLB site has this to say about the
+service: _Service accounts for the controller and speaker, along with the RBAC
+permissions that the components need to function._
+
+You also need a MetalLB configuration file. In my case it contains the address
+pools I use to assign _outside_ IP addresses to Kubernetes services. They are IP
+addresses I use in my network.
+
+I use layer2 mode. This is the most simple mode. In layer 2 mode one node takes
+all the traffic and distributes it to the pods in the cluster. In that sense it
+is not load balancing. The node replies to the arp requests for the IP address.
+A more advanced mode is BGP mode. BGP is a routing protocol tha can load balance
+between nodes with an equal metric. As said this is not necessary in my setup. I
+do not have a lot of traffic coming to my external IP addresses (yet ;)). One
+node can easily handle this traffic.
+
+Below my configuration file. It is the redacted file an my the actual
+configuration because an example is always very helpful I found out.
+
+----
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: default-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 10.10.1.33-10.10.1.63
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: dns
+  namespace: metallb-system
+spec:
+  addresses:
+  - 10.10.1.65/32
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: web
+  namespace: metallb-system
+spec:
+  addresses:
+  - 10.10.1.64/32
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: default
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - default-pool
+  - web
+  - dns
+----
+
+I have three pools. The default pool is used for services that do not need a
+fixed IP address. The other 2 pools are for my web service, and for DNS (yes I
+run my internal DNS server in Kubernetes). The both need a fixed IP address
+obviously and I created pools for them with one IP address. The last bit defines
+the L2 mode and it enables the pools for the service. By enabling them, MetalLB
+starts replying to the ARP requests for these addresses.
+
+That's pretty much all for this deployment. In the service sections of the
+kubernetes yaml files you just create a service with the type loadBalancer and
+this will be picked up by MetalLB.
